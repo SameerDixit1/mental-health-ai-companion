@@ -1,125 +1,107 @@
 import streamlit as st
+from textblob import TextBlob
+import openai
 import os
+from datetime import datetime
 from dotenv import load_dotenv
-import json
-import google.generativeai as genai
 
-import base64
-from PIL import Image
-from io import BytesIO
-
+# Load API key
 load_dotenv()
-
-st.set_page_config(page_title="Mental Support Chatbot")
-
-api_key = os.getenv("GENAI_API_KEY")
-
+api_key = os.getenv("OPENAI_API_KEY")
 if not api_key:
-    api_key = st.secrets["GENAI_API_KEY"]
-    if not api_key:
-        st.error("Please set the GENAI_API_KEY environment variable.")
-        st.stop()
+    st.error("Please set your OPENAI_API_KEY in a .env file.")
+    st.stop()
 
-genai.configure(api_key=api_key)
+client = openai.OpenAI(api_key=api_key)
 
-# Set up the model
-generation_config = {
-    "temperature": 0.9,
-    "top_p": 1,
-    "top_k": 32,
-    "max_output_tokens": 8192,
-}
+# UI Config
+st.set_page_config(page_title="🧠 Mental Health AI Companion", layout="centered")
 
-safety_settings = [
-    {"category": "HARM_CATEGORY_HARASSMENT", "threshold": "BLOCK_MEDIUM_AND_ABOVE"},
-    {"category": "HARM_CATEGORY_HATE_SPEECH", "threshold": "BLOCK_MEDIUM_AND_ABOVE"},
-    {
-        "category": "HARM_CATEGORY_SEXUALLY_EXPLICIT",
-        "threshold": "BLOCK_MEDIUM_AND_ABOVE",
-    },
-    {
-        "category": "HARM_CATEGORY_DANGEROUS_CONTENT",
-        "threshold": "BLOCK_MEDIUM_AND_ABOVE",
-    },
-]
+# Theme toggle
+dark_mode = st.toggle("🌙 Dark Mode", value=True)
+if dark_mode:
+    st.markdown("""
+        <style>
+            html, body, [data-testid="stAppViewContainer"], [data-testid="stAppView"], .main {
+                background-color: #121212;
+                color: white;
+            }
+            textarea, input, .stTextInput, .stTextArea {
+                background-color: #1e1e1e !important;
+                color: white !important;
+            }
+        </style>
+    """, unsafe_allow_html=True)
+else:
+    st.markdown("""
+        <style>
+            html, body, [data-testid="stAppViewContainer"], [data-testid="stAppView"], .main {
+                background-color: #ffffff;
+                color: black;
+            }
+            textarea, input, .stTextInput, .stTextArea {
+                background-color: #f0f0f0 !important;
+                color: black !important;
+            }
+        </style>
+    """, unsafe_allow_html=True)
 
-model = genai.GenerativeModel(
-    model_name="gemini-pro",
-    generation_config=generation_config,
-    safety_settings=safety_settings,
-)
+# App Title
+st.title("🧠 Mental Health AI Companion")
 
-# Load conversation history from file
-with open("conversation_history.json", "r") as file:
-    conversation_history = json.load(file)
+# Initialize chat history
+if "messages" not in st.session_state:
+    st.session_state.messages = [
+        {"role": "system", "content": "You are a helpful and empathetic mental health assistant."}
+    ]
 
-# Start a chat with a greeting and initial information
-convo = model.start_chat(history=conversation_history)
+# Display previous messages
+for msg in st.session_state.messages[1:]:
+    sender = "🧍 You" if msg["role"] == "user" else "🤖 Assistant"
+    st.markdown(f"**{sender}:** {msg['content']}")
 
-welcome_text = "Hello! 😊"
-# Display the model's response using Streamlit
-st.title("Mental Support Chatbot")
-user_input = st.text_input("You:", value=welcome_text)
+# Input
+user_input = st.text_input("What's on your mind?", key="user_input")
 
-if st.button("Send", key="SendButton"):
+# Process input
+if user_input:
+    # Analyze sentiment
+    sentiment = TextBlob(user_input).sentiment
+
+    # Store user message
+    st.session_state.messages.append({"role": "user", "content": user_input})
+
     with st.spinner("Thinking..."):
-        convo.send_message(user_input)
-        st.caption("Bot's Response:")
-        st.write(convo.last.text)
+        try:
+            response = client.chat.completions.create(
+                model="gpt-3.5-turbo",
+                messages=st.session_state.messages
+            )
+            bot_message = response.choices[0].message.content
+            st.session_state.messages.append({"role": "assistant", "content": bot_message})
+        except Exception as e:
+            st.error(f"OpenAI API Error: {e}")
+            st.stop()
 
-img_file_buffer = None
-CameraButton = True
+    # Show response
+    st.markdown(f"**🤖 Assistant:** {bot_message}")
 
-# Button to open the camera
-if st.button("Open Camera", key="Camera"):
-    CameraButton = not CameraButton
-    # Take a picture using the camera input
+    # Sentiment result
+    st.caption("📊 Sentiment Analysis:")
+    st.write(f"Polarity: `{sentiment.polarity:.2f}`, Subjectivity: `{sentiment.subjectivity:.2f}`")
 
-img_file_buffer = st.camera_input(
-    "Take a picture",
-    disabled=CameraButton,
-    help="Let the AI take a photo and analyse your Mood & Facial Expression. Refresh the page and allow camera access if this doesn't works.",
-)
+    # Suggest activity
+    if sentiment.polarity < -0.2:
+        st.info("🌱 You seem a bit down. Try this [3-minute breathing video](https://www.youtube.com/watch?v=ZToicYcHIOU)")
 
-# Check if an image has been taken
-if img_file_buffer is not None:
-    vision_model = genai.GenerativeModel(
-        model_name="gemini-pro-vision",
-        generation_config=generation_config,
-        safety_settings=safety_settings,
-    )
-    vision_model.start_chat(history=conversation_history)
+    # Save log
+    os.makedirs("logs", exist_ok=True)
+    with open(f"logs/log_{datetime.now().strftime('%Y%m%d_%H%M%S')}.txt", "w") as f:
+        f.write(f"User: {user_input}\nBot: {bot_message}\nPolarity: {sentiment.polarity:.2f}\n")
 
-    # Display the taken image
-    # st.image(img_file_buffer, caption="Taken Image", use_column_width=True)
-
-    # Convert the image to bytes
-    img_pil = Image.open(img_file_buffer)
-    img_io = BytesIO()
-    img_pil.save(img_io, format="JPEG")
-    img_bytes = img_io.getvalue()
-
-    # Encode image bytes to base64
-    encoded_img = base64.b64encode(img_bytes).decode("utf-8")
-
-    # Set up image parts for the model
-    image_parts = [
-        {"mime_type": "image/jpeg", "data": encoded_img},
+# Reset chat
+if st.button("🔄 Reset Chat"):
+    st.session_state.messages = [
+        {"role": "system", "content": "You are a helpful and empathetic mental health assistant."}
     ]
-
-    # Prompt for the model
-    prompt_parts = [
-        """Examine the facial expression, mood, and mental well-being conveyed in the given image. Present the outcomes in markdown format as follows:
-            **Facial Expression:** {Predicted facial expression by the model}.  \n
-            **Mood:** {Predicted mood by the model}.  \n
-            **Mental Health:** {Model-generated assessment of mental health}.
-        """,
-        image_parts[0],
-    ]
-
-    # Generate content using the model
-    response = vision_model.generate_content(prompt_parts)
-
-    # Display the model's response
-    st.write(response.text)
-    img_file_buffer.close()
+    st.experimental_rerun()

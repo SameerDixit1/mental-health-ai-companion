@@ -2,25 +2,28 @@ import streamlit as st
 import os
 from dotenv import load_dotenv
 import json
-import google.generativeai as genai
-
 import base64
 from PIL import Image
 from io import BytesIO
+from datetime import datetime
+from textblob import TextBlob
+import google.generativeai as genai
 
+# Load environment
 load_dotenv()
+st.set_page_config(page_title="Mental Support Chatbot")
 
+# API Key setup
 api_key = os.getenv("GENAI_API_KEY")
-
 if not api_key:
-    api_key = st.secrets["GENAI_API_KEY"]
+    api_key = st.secrets.get("GENAI_API_KEY")
     if not api_key:
-        st.error("Please set the GENAI_API_KEY environment variable.")
+        st.error("Please set your GENAI_API_KEY in .env or secrets.toml")
         st.stop()
 
 genai.configure(api_key=api_key)
 
-# Set up the model
+# Model configuration
 generation_config = {
     "temperature": 0.9,
     "top_p": 1,
@@ -31,84 +34,87 @@ generation_config = {
 safety_settings = [
     {"category": "HARM_CATEGORY_HARASSMENT", "threshold": "BLOCK_MEDIUM_AND_ABOVE"},
     {"category": "HARM_CATEGORY_HATE_SPEECH", "threshold": "BLOCK_MEDIUM_AND_ABOVE"},
-    {
-        "category": "HARM_CATEGORY_SEXUALLY_EXPLICIT",
-        "threshold": "BLOCK_MEDIUM_AND_ABOVE",
-    },
-    {
-        "category": "HARM_CATEGORY_DANGEROUS_CONTENT",
-        "threshold": "BLOCK_MEDIUM_AND_ABOVE",
-    },
+    {"category": "HARM_CATEGORY_SEXUALLY_EXPLICIT", "threshold": "BLOCK_MEDIUM_AND_ABOVE"},
+    {"category": "HARM_CATEGORY_DANGEROUS_CONTENT", "threshold": "BLOCK_MEDIUM_AND_ABOVE"},
 ]
 
+# Load conversation history
+if os.path.exists("conversation_history.json"):
+    with open("conversation_history.json", "r") as file:
+        conversation_history = json.load(file)
+else:
+    conversation_history = []
+
+# Initialize model
 model = genai.GenerativeModel(
-    model_name="gemini-pro",
+    model_name="models/gemini-pro",
     generation_config=generation_config,
     safety_settings=safety_settings,
 )
-
-# Load conversation history from file
-with open("conversation_history.json", "r") as file:
-    conversation_history = json.load(file)
-
-# Start a chat with a greeting and initial information
 convo = model.start_chat(history=conversation_history)
 
-welcome_text = "Hello! 😊"
-# Display the model's response using Streamlit
-st.title("Mental Support Chatbot")
-user_input = st.text_input("You:", value=welcome_text)
+# UI
+st.title("🧠 Mental Health AI Companion")
+user_input = st.text_input("You:")
 
-if st.button("Send", key="SendButton"):
-    with st.spinner("Thinking..."):
-        convo.send_message(user_input)
-        st.caption("Bot's Response:")
-        st.write(convo.last.text)
+if st.button("Send"):
+    if user_input.strip():
+        with st.spinner("Thinking..."):
+            convo.send_message(user_input)
+            bot_response = convo.last.text
 
-CameraButton = False
-# Button to open the camera
-if st.button("Open Camera", key="Camera", disabled=CameraButton):
-    CameraButton = True
-    # Take a picture using the camera input
+            # Sentiment
+            sentiment = TextBlob(user_input).sentiment
+            st.caption("🧠 Bot's Response:")
+            st.write(bot_response)
+            st.caption("📊 Sentiment Analysis:")
+            st.write(f"Polarity: {sentiment.polarity:.2f}, Subjectivity: {sentiment.subjectivity:.2f}")
+
+            # Mental Health Suggestion
+            if sentiment.polarity < -0.2:
+                st.info("🌱 You seem a bit down. Try this calming [3-min breathing video](https://www.youtube.com/watch?v=ZToicYcHIOU)")
+
+            # Save conversation log
+            os.makedirs("logs", exist_ok=True)
+            log_data = {
+                "timestamp": str(datetime.now()),
+                "user": user_input,
+                "bot": bot_response,
+                "polarity": sentiment.polarity
+            }
+            with open(f"logs/chat_{datetime.now().strftime('%Y%m%d_%H%M%S')}.json", "w") as f:
+                json.dump(log_data, f, indent=2)
+    else:
+        st.warning("Please type something before sending.")
+
+# Camera section
+st.divider()
+st.subheader("📷 Facial Mood Assessment")
+camera_enabled = st.checkbox("Enable camera input")
+
+if camera_enabled:
     img_file_buffer = st.camera_input("Take a picture")
-
-    # Check if an image has been taken
-    if img_file_buffer is not None:
+    if img_file_buffer:
         vision_model = genai.GenerativeModel(
-            model_name="gemini-pro-vision",
+            model_name="models/gemini-pro-vision",
             generation_config=generation_config,
             safety_settings=safety_settings,
         )
 
-        # Display the taken image
-        # st.image(img_file_buffer, caption="Taken Image", use_column_width=True)
-
-        # Convert the image to bytes
-        img_pil = Image.open(img_file_buffer)
+        vision_model.start_chat(history=conversation_history)
+        img = Image.open(img_file_buffer)
         img_io = BytesIO()
-        img_pil.save(img_io, format="JPEG")
+        img.save(img_io, format="JPEG")
         img_bytes = img_io.getvalue()
-
-        # Encode image bytes to base64
         encoded_img = base64.b64encode(img_bytes).decode("utf-8")
 
-        # Set up image parts for the model
-        image_parts = [
-            {"mime_type": "image/jpeg", "data": encoded_img},
-        ]
-
-        # Prompt for the model
         prompt_parts = [
-            """Analyze the facial expression and mental well-being portrayed in the image. Provide the results in a markdown format as follows:
-                **Facial Expression:** {Facial expression predicted by the model}.  \n
-                **Mental Health:** {Mental health assessment generated by the model}.
-            """,
-            image_parts[0],
+            """Analyze the image and provide:
+**Facial Expression:** ...
+**Mood:** ...
+**Mental Health:** ...""",
+            {"mime_type": "image/jpeg", "data": encoded_img}
         ]
 
-        # Generate content using the model
         response = vision_model.generate_content(prompt_parts)
-
-        # Display the model's response
-        st.write(response.text)
-        CameraButton = False
+        st.markdown(response.text)

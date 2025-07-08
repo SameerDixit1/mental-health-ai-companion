@@ -1,2 +1,8 @@
+# Ignore virtual environment and compiled files
+.conda/
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+*.log
 .env
-DumpConverstion.py
