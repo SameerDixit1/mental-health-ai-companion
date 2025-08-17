@@ -30,7 +30,7 @@ This is a **mental health companion app** built using **Streamlit** and **OpenAI
 
 1. Clone this repository  
    ```bash
-   git clone https://github.com/tekkensam/mental-health-ai-companion.git
+   git clone https://github.com/SameerDixit1/mental-health-ai-companion.git
 2. cd mental-health-ai-companion
 3. pip install -r requirements.txt
 4. OPENAI_API_KEY=your_api_key_here
